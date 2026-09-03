@@ -37,6 +37,9 @@ class OverwatchConfig(DataSourceConfig):
     # 段位参数名
     tier_param = "tier"
 
+    # 服务器列表（三个大区）
+    regions = ["Asia", "Americas", "Europe"]
+
     # 段位列表（含全段位汇总 All）
     # 注：2026-08-11 补丁新增 Emerald（翡翠）段位
     tiers = [

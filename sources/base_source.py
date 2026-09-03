@@ -25,7 +25,9 @@ class DataSourceConfig:
     query_params = {}             # 固定请求参数（如模式、平台等）
     tier_param = "tier"           # 段位对应的查询参数名（不同游戏可能不同）
 
-    # ---- 段位与赛季 ----
+    # ---- 服务器/地区与段位、赛季 ----
+    regions = []                  # 服务器列表（如 ["Asia","Americas","Europe"]；空 = 无地区维度）
+    region_param = "region"       # 服务器对应的查询参数名
     tiers = []                    # 要抓取的段位列表（第一项建议为「全段位汇总」）
     season = ""                   # 当前赛季编号
 

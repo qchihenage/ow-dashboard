@@ -8,11 +8,11 @@
         （原任务指定的 overbuff.com 已于 2025 年永久关停，故改用官方替代源。）
 
 抓取内容：
-    - 竞技模式下，各段位（青铜~宗师）的英雄胜率 / 出场率
+    - 竞技模式下，各「服务器（亚洲/美洲/欧洲）× 段位（青铜~宗师）」的英雄胜率/出场率
     - 输出为 CSV「长表」格式，带赛季与快照日期，供分析与看板使用
 
 可迁移性：
-    爬虫主流程（遍历段位、反爬、写 CSV）与具体数据源解耦，
+    爬虫主流程（遍历服务器/段位、反爬、写 CSV）与具体数据源解耦，
     所有随数据源变化的参数集中在 sources/ 下的配置类中。
     切换数据源只需改命令行参数，例如：
         python crawler.py --source marvel_rivals   # 使用 Marvel Rivals 配置
@@ -23,8 +23,8 @@
     3. 失败自动重试，指数退避，避免偶发网络波动中断整个任务
 
 用法：
-    python crawler.py                    # 抓取 Overwatch 全部段位
-    python crawler.py --tier Gold        # 只抓取指定段位
+    python crawler.py                    # 抓取 Overwatch 全部服务器×段位
+    python crawler.py --tier Gold        # 只抓取指定段位（全部服务器）
     python crawler.py --source marvel_rivals   # 切换数据源（迁移示范）
 """
 
@@ -67,6 +67,7 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 # CSV 表头（长表格式，与具体数据源无关）
 CSV_HEADER = [
     "season",       # 赛季
+    "region",       # 服务器（亚洲 Asia / 美洲 Americas / 欧洲 Europe）
     "tier",         # 段位
     "hero_id",      # 英雄英文 id
     "hero_name",    # 英雄名称
@@ -90,9 +91,11 @@ def get_output_csv(source):
 # ---------------------------------------------------------------------------
 # 网络请求：带重试与退避（与数据源无关的通用逻辑）
 # ---------------------------------------------------------------------------
-def fetch_json(source, tier, session):
-    """请求指定段位的数据，返回解析后的 JSON 字典。"""
+def fetch_json(source, region, tier, session):
+    """请求指定服务器+段位的数据，返回解析后的 JSON 字典。"""
     params = dict(source.query_params)
+    if region:
+        params[source.region_param] = region
     params[source.tier_param] = tier
 
     # 指数退避重试：第 1 次失败等 2s，第 2 次等 4s，第 3 次等 8s
@@ -103,23 +106,24 @@ def fetch_json(source, tier, session):
             resp.raise_for_status()  # 非 2xx 状态码会抛出异常
             return resp.json()
         except (requests.RequestException, ValueError) as exc:
-            print(f"  [警告] 段位 {tier} 第 {attempt}/{MAX_RETRIES} 次请求失败: {exc}")
+            print(f"  [警告] {region}/{tier} 第 {attempt}/{MAX_RETRIES} 次请求失败: {exc}")
             if attempt == MAX_RETRIES:
-                raise RuntimeError(f"段位 {tier} 重试 {MAX_RETRIES} 次后仍失败") from exc
+                raise RuntimeError(f"{region}/{tier} 重试 {MAX_RETRIES} 次后仍失败") from exc
             time.sleep(2 ** attempt)  # 退避：2s、4s
 
 
-def fetch_tier_data(source, tier, session, snapshot_date):
-    """把单个段位的接口数据，通过配置类解析成若干行 CSV 记录。"""
-    payload = fetch_json(source, tier, session)
+def fetch_tier_data(source, region, tier, session, snapshot_date):
+    """把单个 服务器+段位 的接口数据，通过配置类解析成若干行 CSV 记录。"""
+    payload = fetch_json(source, region, tier, session)
     heroes = source.parse_heroes(payload)  # 关键：解析规则来自配置类
     if not heroes:
-        raise RuntimeError(f"段位 {tier} 返回的数据解析后为空")
+        raise RuntimeError(f"{region}/{tier} 返回的数据解析后为空")
 
     rows = []
     for h in heroes:
         rows.append([
             source.season,
+            region,
             tier,
             h["id"],
             h["name"],
@@ -144,7 +148,8 @@ def load_existing_rows(path):
         reader = list(csv.reader(f))
     if not reader:
         return []
-    return reader[1:] if reader[0][:2] == ["season", "tier"] else reader
+    # 以表头前两列判断是否含表头（season, region）
+    return reader[1:] if reader[0][:2] == ["season", "region"] else reader
 
 
 def save_rows(path, rows):
@@ -168,34 +173,40 @@ def main():
 
     # 通过配置类实例化数据源（换数据源 = 换这里的类）
     source = SOURCES[args.source]()
+    regions = source.regions or [""]   # 无地区维度时用空串占位
     tiers = [args.tier] if args.tier else source.tiers
 
-    # 本次运行使用统一的快照日期（避免不同段位日期不一致）
+    # 本次运行使用统一的快照日期（避免不同请求日期不一致）
     snapshot_date = datetime.now().strftime("%Y-%m-%d")
+    date_idx = CSV_HEADER.index("snapshot_date")  # 用表头定位列，避免硬编码
 
     print(f"开始抓取 | 数据源={source.name} | 赛季={source.season} "
-          f"| 段位={tiers} | 快照日期={snapshot_date}")
+          f"| 服务器={regions or ['(无)']} | 段位={tiers} | 快照日期={snapshot_date}")
 
     # 复用 Session，减少 TCP 握手开销
     session = requests.Session()
     session.headers.update(source.headers)
 
     all_new_rows = []
-    for tier in tiers:
-        print(f"正在抓取段位: {tier}")
-        rows = fetch_tier_data(source, tier, session, snapshot_date)
-        all_new_rows.extend(rows)
-        print(f"  完成，共 {len(rows)} 个英雄")
-        # 段位之间随机延时，降低被限流的概率
-        if tier != tiers[-1]:
+    total = len(regions) * len(tiers)
+    done = 0
+    for region in regions:
+        for tier in tiers:
+            done += 1
+            label = f"{region}/{tier}" if region else tier
+            print(f"[{done}/{total}] 正在抓取: {label}")
+            rows = fetch_tier_data(source, region, tier, session, snapshot_date)
+            all_new_rows.extend(rows)
+            print(f"  完成，共 {len(rows)} 个英雄")
+            # 请求之间随机延时，降低被限流的概率
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
     # 读取历史数据，去掉「今天」的旧快照（保证重复运行幂等），再拼上新数据
     output_csv = get_output_csv(source)
     existing = load_existing_rows(output_csv)
-    kept = [r for r in existing if len(r) > 9 and r[9] != snapshot_date]
+    kept = [r for r in existing if len(r) > date_idx and r[date_idx] != snapshot_date]
     final_rows = kept + all_new_rows
-    final_rows.sort(key=lambda r: (r[9], r[1]))  # 按 快照日期、段位 排序
+    final_rows.sort(key=lambda r: (r[date_idx], r[0], r[1], r[2]))  # 日期、赛季、服务器、段位
 
     save_rows(output_csv, final_rows)
     print(f"\n完成！本次新增 {len(all_new_rows)} 行，累计 {len(final_rows)} 行。")

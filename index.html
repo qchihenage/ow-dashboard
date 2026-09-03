@@ -7,27 +7,17 @@
   <!-- ECharts 图表库（CDN） -->
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
   <style>
-    /* ============ 设计变量（取自校验过的数据可视化调色板） ============
-       - 页面/表面、墨色、网格线、坐标轴等角色统一用变量引用，
-         便于日后整体替换主题（例如深色模式）。 */
     :root {
-      --surface:   #fcfcfb;   /* 卡片表面 */
-      --page:      #f9f9f7;   /* 页面背景 */
-      --ink:       #0b0b0b;   /* 主文字 */
-      --ink-2:     #52514e;   /* 次级文字 */
-      --muted:     #898781;   /* 轴标签等弱化文字 */
-      --grid:      #e1e0d9;   /* 网格线（发丝） */
-      --axis:      #c3c2b7;   /* 坐标轴线 */
+      --surface:   #fcfcfb;
+      --page:      #f9f9f7;
+      --ink:       #0b0b0b;
+      --ink-2:     #52514e;
+      --muted:     #898781;
+      --grid:      #e1e0d9;
+      --axis:      #c3c2b7;
       --border:    rgba(11,11,11,0.10);
-      --blue:      #2a78d6;   /* 分类色 1：蓝 */
-      --orange:    #eb6834;   /* 分类色 2：橙 */
-      /* 顺序色阶（蓝，浅→深，用于「出场率」与「强度梯度」的有序编码） */
-      --seq-150:   #b7d3f6;
-      --seq-250:   #86b6ef;
-      --seq-350:   #5598e7;
-      --seq-450:   #2a78d6;
-      --seq-600:   #184f95;
-      --seq-700:   #0d366b;
+      --blue:      #2a78d6;
+      --orange:    #eb6834;
     }
 
     * { box-sizing: border-box; }
@@ -64,7 +54,6 @@
       font-weight: 400;
     }
 
-    /* 筛选行：统一放在图表上方 */
     .filters {
       display: flex;
       gap: 16px;
@@ -112,7 +101,6 @@
       margin: 0 0 12px;
     }
 
-    /* 主体两列：柱状图 + 排行侧边栏 */
     .grid {
       display: grid;
       grid-template-columns: 1fr 320px;
@@ -122,7 +110,6 @@
 
     #winrate-chart { width: 100%; height: 520px; }
 
-    /* 排行侧边栏（同时承担表格视图职责） */
     .rank-list { max-height: 520px; overflow-y: auto; }
     .grade-group { margin-bottom: 10px; }
     .grade-head {
@@ -155,7 +142,7 @@
       cursor: pointer;
     }
     .hero-row:hover { background: var(--grid); }
-    .hero-row.active { background: var(--seq-150); }
+    .hero-row.active { background: var(--seq-150, #b7d3f6); }
     .hero-row .name { font-weight: 550; }
     .hero-row .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
     .hero-row .score { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -170,7 +157,6 @@
     .col-head span { text-align: right; }
     .col-head span:first-child { text-align: left; }
 
-    /* 趋势面板：两个单指标小多图 */
     .trend-panel {
       margin-top: 20px;
       display: grid;
@@ -205,6 +191,9 @@
       <h1>Overwatch 英雄强度看板<span class="subtitle">数据源：暴雪官方英雄数据页 · 每周自动更新</span></h1>
     </div>
     <div class="filters">
+      <label>服务器
+        <select id="region-select"></select>
+      </label>
       <label>赛季
         <select id="season-select"></select>
       </label>
@@ -225,7 +214,7 @@
 
       <aside class="card">
         <h2>强度梯度排行</h2>
-        <p class="hint" id="rank-hint">综合强度 = 0.6×胜率 + 0.4×出场率（各自归一化）</p>
+        <p class="hint" id="rank-hint">综合强度 = 0.6×胜率 + 0.4×出场率（归一化）</p>
         <div class="col-head">
           <span>英雄</span><span>胜率</span><span>出场</span><span>评分</span>
         </div>
@@ -241,7 +230,7 @@
           <select id="hero-select"></select>
         </label>
       </div>
-      <p class="hint trend-hint">当前段位下该英雄的胜率 / 出场率随快照日期的变化（数据每周累积）。</p>
+      <p class="hint trend-hint">当前服务器 + 段位下该英雄的胜率 / 出场率随快照日期的变化（数据每周累积）。</p>
       <div class="chart" id="trend-winrate"></div>
       <div class="chart" id="trend-pickrate"></div>
     </section>
@@ -257,17 +246,19 @@
     // =====================================================================
     const DATA_URL = 'data/dashboard_data.json';
 
-    // 页面全局状态
     let DATA = null;
-    let state = { season: null, tier: 'All', hero: null };
+    let state = { season: null, region: 'Asia', tier: 'All', hero: null };
 
-    // 两个 ECharts 实例（柱状图 + 两个趋势小图）
     let barChart, winChart, pickChart;
 
-    // 顺序色阶：出场率（浅→深）与强度梯度（D→S 深）共用同一蓝色阶
-    const SEQ = ['#b7d3f6', '#86b6ef', '#5598e7', '#2a78d6', '#184f95', '#0d366b'];
-    // 梯度 S/A/B/C/D -> 色阶（S 最深、D 最浅，单色单调明度）
+    // 梯度 S/A/B/C/D -> 单色单调明度色阶（S 最深、D 最浅）
     const GRADE_COLOR = { S: '#184f95', A: '#2a78d6', B: '#5598e7', C: '#86b6ef', D: '#b7d3f6' };
+
+    // 服务器/段位的中文名
+    const REGION_NAMES = { Asia: '亚洲', Americas: '美洲', Europe: '欧洲' };
+    const TIER_NAMES = { All: '全段位', Bronze: '青铜', Silver: '白银', Gold: '黄金',
+                         Platinum: '铂金', Emerald: '翡翠', Diamond: '钻石',
+                         Master: '大师', Grandmaster: '宗师' };
 
     // ---------- 初始化 ----------
     async function init() {
@@ -276,11 +267,11 @@
       DATA = await resp.json();
 
       state.season = DATA.meta.season;
+      state.region = DATA.meta.regions.includes('Asia') ? 'Asia' : DATA.meta.regions[0];
       state.tier = DATA.meta.tiers.includes('All') ? 'All' : DATA.meta.tiers[0];
 
       populateFilters();
-      // 默认选中当前段位综合强度最高的英雄
-      state.hero = DATA.tier_data[state.tier][0].hero_id;
+      state.hero = (DATA.region_data[state.region][state.tier] || [])[0].hero_id;
 
       barChart = echarts.init(document.getElementById('winrate-chart'));
       winChart = echarts.init(document.getElementById('trend-winrate'));
@@ -293,21 +284,21 @@
       });
     }
 
-    // 填充筛选下拉框
     function populateFilters() {
+      const regionSel = document.getElementById('region-select');
+      regionSel.innerHTML = DATA.meta.regions
+        .map(r => `<option value="${r}">${REGION_NAMES[r] || r}</option>`).join('');
+      regionSel.value = state.region;
+
       const seasonSel = document.getElementById('season-select');
       seasonSel.innerHTML = DATA.meta.seasons.map(s => `<option value="${s}">${s}</option>`).join('');
       seasonSel.value = state.season;
 
       const tierSel = document.getElementById('tier-select');
-      const tierNames = { All: '全段位', Bronze: '青铜', Silver: '白银', Gold: '黄金',
-                          Platinum: '铂金', Emerald: '翡翠', Diamond: '钻石',
-                          Master: '大师', Grandmaster: '宗师' };
       tierSel.innerHTML = DATA.meta.tiers
-        .map(t => `<option value="${t}">${tierNames[t] || t}</option>`).join('');
+        .map(t => `<option value="${t}">${TIER_NAMES[t] || t}</option>`).join('');
       tierSel.value = state.tier;
 
-      // 英雄下拉：按名称排序
       const heroSel = document.getElementById('hero-select');
       const names = Object.entries(DATA.heroes)
         .map(([id, h]) => ({ id, name: h.name }))
@@ -315,8 +306,11 @@
       heroSel.innerHTML = names.map(n => `<option value="${n.id}">${n.name}</option>`).join('');
     }
 
-    // 事件绑定
     function bindEvents() {
+      document.getElementById('region-select').addEventListener('change', e => {
+        state.region = e.target.value;
+        render();
+      });
       document.getElementById('tier-select').addEventListener('change', e => {
         state.tier = e.target.value;
         render();
@@ -328,7 +322,7 @@
       document.getElementById('hero-select').addEventListener('change', e => {
         state.hero = e.target.value;
         renderTrend();
-        renderRankList(); // 刷新高亮
+        renderRankList();
       });
     }
 
@@ -338,29 +332,34 @@
       renderTrend();
     }
 
+    // 当前筛选切片下的英雄数据（按综合强度降序）
+    function currentEntries() {
+      return (DATA.region_data[state.region] || {})[state.tier] || [];
+    }
+
     // ---------- 1. 胜率柱状图（柱色深浅 = 出场率） ----------
     function renderBar() {
-      const entries = DATA.tier_data[state.tier] || [];
-      // 出场率采用「全局固定」色阶（0 ~ 全局最大值），保证切换段位时颜色含义不变
-      const globalMaxPick = maxPickrateAcrossTiers();
-      const names = entries.map(e => e.name);
-      // 每个数据点：[胜率, 出场率, 原始索引]，visualMap 用第 2 维（出场率）着色
-      const data = entries.map((e, i) => [e.winrate, e.pickrate, i]);
+      const entries = currentEntries();
+      const globalMaxPick = maxPickrateAcrossAll();
 
+      // 用 dataset + encode 明确指定各维度角色，避免 visualMap 对
+      // 二维数组 data 的歧义解析（这是之前只显示一位英雄的根因）。
       barChart.setOption({
+        dataset: {
+          source: entries.map(e => ({
+            name: e.name, winrate: e.winrate, pickrate: e.pickrate, hero_id: e.hero_id
+          }))
+        },
         grid: { left: 44, right: 16, top: 20, bottom: 60 },
         tooltip: {
           trigger: 'item',
           backgroundColor: '#ffffff',
           borderColor: '#e1e0d9',
           textStyle: { color: '#0b0b0b', fontSize: 13 },
-          formatter: p => {
-            const e = entries[p.data[2]];
-            return `<b>${e.name}</b><br/>胜率 ${e.winrate.toFixed(1)}%<br/>出场率 ${e.pickrate.toFixed(1)}%`;
-          }
+          formatter: p => `<b>${p.data.name}</b><br/>胜率 ${p.data.winrate.toFixed(1)}%<br/>出场率 ${p.data.pickrate.toFixed(1)}%`
         },
         xAxis: {
-          type: 'category', data: names,
+          type: 'category',
           axisLine: { lineStyle: { color: '#c3c2b7' } },
           axisTick: { show: false },
           axisLabel: { color: '#898781', fontSize: 11, rotate: 55, interval: 0 }
@@ -375,7 +374,7 @@
         },
         visualMap: {
           type: 'continuous', min: 0, max: globalMaxPick,
-          dimension: 1,
+          dimension: 'pickrate',          // 用 dataset 维度名着色
           inRange: { color: ['#cde2fb', '#0d366b'] },
           orient: 'horizontal', left: 'center', bottom: 0,
           itemWidth: 12, itemHeight: 120,
@@ -385,19 +384,16 @@
         },
         series: [{
           type: 'bar',
-          data,
+          encode: { x: 'name', y: 'winrate' },
           barMaxWidth: 22,
-          itemStyle: { borderRadius: [3, 3, 0, 0] },
-          // 点击柱子 -> 选中该英雄
-          emphasis: { itemStyle: { opacity: 0.85 } }
+          itemStyle: { borderRadius: [3, 3, 0, 0] }
         }]
       }, true);
 
-      // 点击柱状图选中英雄
       barChart.off('click');
       barChart.on('click', p => {
-        if (p.data && p.data.length > 2) {
-          state.hero = entries[p.data[2]].hero_id;
+        if (p.data && p.data.hero_id) {
+          state.hero = p.data.hero_id;
           document.getElementById('hero-select').value = state.hero;
           renderTrend();
           renderRankList();
@@ -405,18 +401,19 @@
       });
     }
 
-    // 计算所有段位中的最大出场率，作为固定色阶上限
-    function maxPickrateAcrossTiers() {
+    function maxPickrateAcrossAll() {
       let m = 0;
-      for (const t in DATA.tier_data) {
-        for (const e of DATA.tier_data[t]) m = Math.max(m, e.pickrate);
+      for (const region in DATA.region_data) {
+        for (const tier in DATA.region_data[region]) {
+          for (const e of DATA.region_data[region][tier]) m = Math.max(m, e.pickrate);
+        }
       }
       return Math.ceil(m);
     }
 
     // ---------- 2. 强度梯度排行侧边栏（表格视图） ----------
     function renderRankList() {
-      const entries = DATA.tier_data[state.tier] || [];
+      const entries = currentEntries();
       const grades = ['S', 'A', 'B', 'C', 'D'];
       const listEl = document.getElementById('rank-list');
       document.getElementById('rank-hint').textContent =
@@ -442,7 +439,6 @@
       }
       listEl.innerHTML = html;
 
-      // 点击英雄行 -> 联动趋势图
       listEl.querySelectorAll('.hero-row').forEach(row => {
         row.addEventListener('click', () => {
           state.hero = row.dataset.hero;
@@ -456,19 +452,16 @@
     // ---------- 3. 单英雄历史趋势（两个单指标小多图，避免双轴） ----------
     function renderTrend() {
       const hero = state.hero;
-      const series = (DATA.history[hero] || {})[state.tier] || [];
+      const series = ((DATA.history[hero] || {})[state.region] || {})[state.tier] || [];
       const dates = series.map(s => s.date);
       const winrates = series.map(s => s.winrate);
       const pickrates = series.map(s => s.pickrate);
-      const heroName = (DATA.heroes[hero] || {}).name || hero;
 
-      // 胜率趋势（蓝）
       winChart.setOption({
         title: { text: '胜率走势 (%)', left: 0, top: 0, textStyle: { fontSize: 13, color: '#52514e', fontWeight: 600 } },
         grid: { left: 44, right: 16, top: 30, bottom: 30 },
         tooltip: {
-          trigger: 'axis',
-          backgroundColor: '#fff', borderColor: '#e1e0d9',
+          trigger: 'axis', backgroundColor: '#fff', borderColor: '#e1e0d9',
           textStyle: { color: '#0b0b0b' },
           formatter: ps => {
             const s = series[ps[0].dataIndex];
@@ -489,13 +482,11 @@
         }]
       }, true);
 
-      // 出场率趋势（橙）
       pickChart.setOption({
         title: { text: '出场率走势 (%)', left: 0, top: 0, textStyle: { fontSize: 13, color: '#52514e', fontWeight: 600 } },
         grid: { left: 44, right: 16, top: 30, bottom: 30 },
         tooltip: {
-          trigger: 'axis',
-          backgroundColor: '#fff', borderColor: '#e1e0d9',
+          trigger: 'axis', backgroundColor: '#fff', borderColor: '#e1e0d9',
           textStyle: { color: '#0b0b0b' },
           formatter: ps => {
             const s = series[ps[0].dataIndex];
@@ -517,7 +508,6 @@
       }, true);
     }
 
-    // 启动
     init().catch(err => {
       document.body.innerHTML = `<div style="padding:40px;font-family:system-ui;">${err.message}</div>`;
     });
