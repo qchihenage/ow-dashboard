@@ -1,0 +1,2 @@
+# 项目运行依赖（数据分析仅用 Python 标准库，爬虫只需 requests）
+requests>=2.28

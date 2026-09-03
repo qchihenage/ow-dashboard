@@ -1,0 +1,13 @@
+# Python 运行产物
+__pycache__/
+*.pyc
+*.pyo
+
+# 本地预览临时文件
+_rendered_dom.html
+
+# 编辑器/系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

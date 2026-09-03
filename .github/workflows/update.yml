@@ -1,0 +1,87 @@
+# =============================================================================
+# 每周自动更新数据 + 部署到 GitHub Pages
+#
+# 流程说明：
+#   1. 每周定时（或手动）触发，运行爬虫抓取最新英雄数据；
+#   2. 运行分析脚本，重新计算强度评分并生成看板数据；
+#   3. 把更新的数据提交回仓库（累积历史快照）；
+#   4. 把整站（index.html + data/）部署到 GitHub Pages。
+# =============================================================================
+
+name: Weekly Data Update
+
+on:
+  # 每周一 03:00 (UTC) 自动触发
+  schedule:
+    - cron: '0 3 * * 1'
+  # 支持在 GitHub 网页上手动触发
+  workflow_dispatch:
+
+# 权限：写回数据（contents） + 部署 Pages（pages / id-token）
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# 同一时间只允许一个实例运行，避免并发写数据冲突
+concurrency:
+  group: weekly-update
+  cancel-in-progress: false
+
+jobs:
+  # ---------------- 任务一：更新数据 ----------------
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      - name: 运行爬虫（抓取数据）
+        run: python crawler.py
+
+      - name: 运行分析（生成看板数据）
+        run: python analysis.py
+
+      - name: 提交更新后的数据
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/hero_stats.csv data/dashboard_data.json
+          # 若数据无变化则跳过提交（避免产生空提交）
+          if git diff --cached --quiet; then
+            echo "数据无变化，跳过提交"
+          else
+            git commit -m "chore: 每周数据自动更新 $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+  # ---------------- 任务二：部署到 GitHub Pages ----------------
+  deploy:
+    needs: update-data   # 依赖数据更新完成后执行
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Pages
+        uses: actions/configure-pages@v5
+
+      - name: 打包站点
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'        # 整站（index.html + data/）作为部署产物
+
+      - name: 部署到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
